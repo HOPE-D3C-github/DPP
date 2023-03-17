@@ -45,13 +45,3 @@ SELECT * FROM updated_race;
 FROM updated_race
 GROUP BY uid; */
 
-
-
-
-
-
-
-
-
-
-

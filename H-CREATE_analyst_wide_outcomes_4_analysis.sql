@@ -1,14 +1,16 @@
 /* NOTE: RUN THE LINES AT THE BOTTOM OF THE PAGE TOO */
 use workflow;
-DROP TABLE IF EXISTS analyst.H_wide_outcomes_4_analysis_temp;
-CREATE TABLE analyst.H_wide_outcomes_4_analysis_temp
+DROP TABLE IF EXISTS analyst.H_wide_outcomes_4_analysis;
+-- CREATE TABLE analyst.H_wide_outcomes_4_analysis
 
 with wide_w_outcomes as (select 
-	a1.patient_cd
+	-- a1.patient_cd
+    cw.uid
     , pl.patient_language		primary_language
     , CONVERT( a2.PROC_INST_ID_, CHAR(75)) 		phase1_PROC_INST_ID
     , CONVERT( a3.PROC_INST_ID_, CHAR(75)) 		phase2_PROC_INST_ID
     , a4.START_TIME_		phase1_rand_hrts_GMT
+    , analyst.convert_to_AmDenv(a4.START_TIME_)		phase1_rand_hrts_AmDenv
     , a4.TEXT_			phase1_msg_freq_rand 			/* 1st phase message frequency randomization: TM1 versus TM+ */
     , a5.TEXT_			phase1_msg_type_rand 			/* 1st phase message type randomization: Autonomy vs Directive vs Mixed */
     , a6.START_TIME_		phase2_rand_hrts_GMT			/* @TB move this as the first of the 2nd phase workflow columns, when starting 2nd phase */
@@ -89,6 +91,9 @@ with wide_w_outcomes as (select
         
 from 
 	( select patient_cd from analyst.A_workflow_data_tall group by patient_cd) a1
+left join
+	( select patient_cd, uid FROM analyst.z0_crosswalk_uid_to_MRN ) cw
+    on a1.patient_cd = cw.patient_cd
 left join
 	( select patient_cd, patient_language from bmi_clinic_patient) pl
     on pl.patient_cd = a1.patient_cd    
@@ -203,6 +208,7 @@ left join
 	( select * from analyst.D_tm_response_summarized where message_type_order = 3) p2tm3
     on p2tm3.PROC_INST_ID_ = a3.PROC_INST_ID_)
 
+-- SELECT * FROM wide_w_outcomes;
    
 /* Known issue where TM+ pts didnt recieve their 5th TM in first phase	*/
 /**/
@@ -261,11 +267,10 @@ on n3.phase2_PROC_INST_ID = wi.phase2_PROC_INST_ID)
 	END as phase2_maps_rounds_count
     , if(phase2_msg_maps_freq_rand is not null AND phase2_msg_maps_freq_rand not in ('MAPS' /*this is TM1 MAPS*/, 'TM+MAPS'), null, coalesce(MAPS_1_call_count, 0) + coalesce(MAPS_2_call_count, 0) + coalesce(MAPS_3_call_count, 0))			  phase2_maps_call_attempts  
 from wide_dat_v2
-group by patient_cd)
+group by uid)
 
 SELECT 
-	cw.uid
-	, wd3.*
+	wd3.*
     , if(phase1_msg_freq_rand = 'Ctrl', null, coalesce(phase1_treatment_tm_count, 0) + coalesce(phase2_treatment_tm_count, 0))		total_intervention_tm_count
     , phase2_maps_rounds_count			total_maps_rounds_count
     , phase2_maps_call_attempts		total_maps_call_attempts
@@ -285,28 +290,16 @@ SELECT
     , coalesce( phase1_dppEnrolled_hrts_GMT, phase2_dppEnrolled_hrts_GMT)				total_dppEnrolled_hrts_GMT
     , coalesce( phase1_IncentaHealthID, phase2_IncentaHealthID)						total_IncentaHealthID
     -- , CONVERT(CONCAT( 'DPP:', ROW_NUMBER() OVER ( ORDER BY phase1_rand_hrts_GMT, phase1_PROC_INST_ID )), CHAR(750))	uid
-FROM wide_dat_v3 wd3
-LEFT JOIN analyst.E_crosswalk_uid_to_patient_cd cw
-on cw.patient_cd = wd3.patient_cd;
+FROM wide_dat_v3 wd3;
 
-DROP TABLE IF EXISTS analyst.H_wide_outcomes_4_analysis;
-
-CREATE TABLE analyst.H_wide_outcomes_4_analysis
-SELECT * FROM analyst.H_wide_outcomes_4_analysis_temp;
-
-ALTER TABLE analyst.H_wide_outcomes_4_analysis
-	DROP COLUMN patient_cd,
-    ADD PRIMARY KEY (uid(20)),
-    MODIFY COLUMN uid VARCHAR(20) FIRST;
-DROP TABLE IF EXISTS analyst.H_wide_outcomes_4_analysis_temp;
 
 /**/
 /* People from 1st workflow that we are waiting for their data, may need to hard code their incentahealth id later*/
 /* 
-Create new unique ID w/o phi	
-GMT to local time
-add standardized responses for each inbound text
-cast or convert for the text fields to enable table creation w/o error
-add timetosend for each message. message 1 time to send is when it was sent. Add to tall and wide (before the intervention message was sent)
+[x] Create new unique ID w/o phi	
+[ ] GMT to local time
+[ ] add standardized responses for each inbound text
+[x] cast or convert for the text fields to enable table creation w/o error
+[ ] add timetosend for each message. message 1 time to send is when it was sent. Add to tall and wide (before the intervention message was sent)
 */
 

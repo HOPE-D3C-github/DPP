@@ -10,6 +10,7 @@ CREATE TABLE analyst.z0_crosswalk_uid_to_MRN
 
 SELECT 
 	DISTINCT MRN
+    , CONCAT('DPP:', MRN)	patient_cd
     , CONVERT(CONCAT( 'DPP:', ROW_NUMBER() OVER (ORDER BY MRN)), CHAR(750)) uid
 FROM analyst.raw_EHR_demographics;
 
