@@ -1,3 +1,11 @@
+/* 
+Summary: This script writes the wide outcomes WF dataset as a table on the analyst schema.
+
+Inputs from analyst schema: None
+
+Outputs: analyst.A_workflow_data_tall
+*/
+
 use workflow;
 DROP TABLE IF EXISTS analyst.workflow_data_tall;
 CREATE TABLE analyst.A_workflow_data_tall as

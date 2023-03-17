@@ -1,17 +1,29 @@
+/* 
+Summary: This script writes the tall text messages dataset as a table on the analyst schema. 
+		 That dataset feeds into the pipeline to be used in the wide outcomes WF dataset, but can also be a standalone 'per request' additional dataset for analysis
+
+Inputs from analyst schema: analyst.A_workflow_data_tall
+
+Outputs: analyst.B_textmessages_tall
+*/
 use workflow;
 DROP TABLE IF EXISTS analyst.B_textmessages_tall;
 CREATE TABLE analyst.B_textmessages_tall
 
-with clarified_resp as (select 
+with 
+
+/*clarified_resp as (select 
 	PROC_INST_ID_
     , 'manuallyClarifiedResponse' 	NAME_
     , START_TIME_					TIME_
+    , analyst.convert_to_AmDenv(START_TIME_) TIME_AmDenv
     , TEXT_
 	, 'manuallyClarifiedResponse'	textType
 from analyst.A_workflow_data_tall where NAME_ = 'pnResponse' AND ACT_ID_ in ('staffReviewTM1', 'staffReviewTMPlus', 'tm1AndMapsInvalidResponseSort', 'tmPlusInvalidResponseSort'))
 
 
-, base as (SELECT
+,*/ 
+base as (SELECT
 	PROC_INST_ID_
     , NAME_
     , TIME_
@@ -43,6 +55,7 @@ Need to re-name as  'tm1AndMapsMessage' */
 	base.PROC_INST_ID_
     , if( p4.TEXT_ = 'MAPS' AND base.NAME_ = 'message1SentText', 'tm1AndMapsMessage', base.NAME_) 		NAME_
     , base.TIME_
+    , analyst.convert_to_AmDenv(base.TIME_) TIME_AmDenv
     , base.TEXT_
     , if( p4.TEXT_ = 'MAPS' AND base.NAME_ = 'message1SentText', 'tm1AndMapsMessage', base.textType) 		textType
 from (select * from base) base
@@ -52,7 +65,7 @@ from (select * from base) base
 
 -- select * from base_v2;
 
-, base_v3 as (select * from base_v2 union all select * FROM clarified_resp) 
+/*, base_v3 as (select * from base_v2 union all select * FROM clarified_resp) */
 
 -- select * from base_v3 order by PROC_INST_ID_, TIME_, NAME_ desc;
 

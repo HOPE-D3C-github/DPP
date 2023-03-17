@@ -1,8 +1,11 @@
-/*	
-NOTES: The 'last_response_time' is currently tracking the time 
-a pn manually reviewed and updated a response, when applicable. May
-want to update the code so that it is tracking the time when the pt
-texted their response as the 'last_response_time'
+/* 
+Summary: This script writes semi-wide text messages dataset as a table on the analyst schema. 
+		 It is semi-wide in that each row is an intervention (parent message) [or MAPS notification message (TM1+MAPS only!)], and it has columns for all subsequent messages (child messages).
+		 That dataset feeds into the pipeline to be used in the wide outcomes WF dataset, but can also be a standalone 'per request' additional dataset for analysis
+
+Inputs from analyst schema: analyst.B_textmessages_tall
+
+Outputs: analyst.C_tm_responses_wide
 */
 use workflow;
 DROP TABLE analyst.C_tm_responses_wide;
