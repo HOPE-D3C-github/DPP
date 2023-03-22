@@ -14,16 +14,15 @@ Outputs:	analyst.z2_demographics
 
 */
 
-DROP TABLE IF EXISTS analyst.z2_demographics;
-CREATE TABLE analyst.z2_demographics
+DROP TABLE IF EXISTS analyst.E_EHR_demographics; 
+CREATE TABLE analyst.E_EHR_demographics
 
 /* STEP 1. Creating a patient-level race dataset (Race categorized as "Multiracial" if more than 1 of the updated race categories) */
 with pt_race as (SELECT
 	uid
     , IF( count(1) = 1, race, "Multiracial") pt_race 
-FROM analyst.z1_race_tall
+FROM analyst.D_EHR_race_tall
 GROUP BY uid)
--- SELECT * FROM pt_race
 
 /* STEP 2. Join raw demographics to uid crosswalk & patient-level race data */
 , demog_2 as (SELECT
@@ -32,13 +31,11 @@ GROUP BY uid)
     , dg.*
 FROM (SELECT * FROM analyst.raw_EHR_demographics) dg
 LEFT JOIN
-	(SELECT MRN, uid FROM analyst.z0_crosswalk_uid_to_MRN) cw
+	(SELECT MRN, uid FROM analyst.C_crosswalk_uid_to_MRN) cw
 ON dg.MRN = cw.MRN
 LEFT JOIN 
 	(SELECT * FROM pt_race) pr
 ON cw.uid = pr.uid)
-
--- SELECT * FROM demog_2;
 
 /* STEP 3. Remove PHI variables from demographics (**NOTE: Additional removal may be necessary**)*/
 SELECT 
@@ -47,6 +44,4 @@ SELECT
     , SEX, LANGUAGE, ETHNICITY
     , STR_TO_DATE(LAST_PCP_ENCOUNTER_DT, '%d-%b-%Y') last_pcp_encounter_dt
     ,HEIGHT, HEIGHT_UNITS, WEIGHT, WEIGHT_UNITS, BMI, CITY, ZIP
-
-FROM demog_2
-; 
+FROM demog_2;

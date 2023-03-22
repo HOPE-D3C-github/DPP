@@ -1,6 +1,6 @@
-use workflow;
-DROP TABLE IF EXISTS analyst.F_mapsCalls_tall;
-CREATE TABLE analyst.F_mapsCalls_tall as
+/* Matching MAPS Calls to Outcomes */
+CREATE TABLE analyst.mapsCalls_outcomes as
+/* START: REMOVE THIS FROM COPY PASTE INTO MAIN - it is redundant */
 with base as (SELECT
 	PROC_INST_ID_
     , NAME_
@@ -94,9 +94,7 @@ ON maps3.PROC_INST_ID_ = maps1.PROC_INST_ID_)
 -- SELECT * FROM maps_msg_times
  
  , maps_outcomes as (SELECT 
-	cw.uid
-	, pi.BUSINESS_KEY_
-    , maps_outcomes_base.PROC_INST_ID_
+    maps_outcomes_base.PROC_INST_ID_
     , CASE 
 		WHEN maps2_message_hrts_GMT is null THEN 1
         WHEN TIME_ BETWEEN maps1_message_hrts_GMT AND maps2_message_hrts_GMT THEN 1
@@ -109,12 +107,28 @@ ON maps3.PROC_INST_ID_ = maps1.PROC_INST_ID_)
     , TEXT_		maps_outcome
 FROM maps_outcomes_base
 LEFT JOIN maps_msg_times
-ON maps_msg_times.PROC_INST_ID_ = maps_outcomes_base.PROC_INST_ID_
-LEFT JOIN ACT_HI_PROCINST pi
-ON pi.PROC_INST_ID_ = maps_outcomes_base.PROC_INST_ID_
-LEFT JOIN analyst.E_crosswalk_uid_to_patient_cd cw
-ON cw.patient_cd = pi.BUSINESS_KEY_
+ON maps_msg_times.PROC_INST_ID_ = maps_outcomes_base.PROC_INST_ID_)
 
+-- SELECT * FROM maps_outcomes ORDER BY PROC_INST_ID_, TIME_;
+
+, maps_per_msg_outcomes as (SELECT * FROM (SELECT 
+	*
+    , MIN(TIME_) OVER ( PARTITION BY PROC_INST_ID_, maps_msg_number )	time_of_earliest_call_per_msg_number
+    , MAX(TIME_) OVER ( PARTITION BY PROC_INST_ID_, maps_msg_number )	lastvalue_time
+ FROM maps_outcomes) sub
+	WHERE TIME_ = lastvalue_time
 )
 
-SELECT * FROM maps_outcomes ORDER BY PROC_INST_ID_, TIME_;
+SELECT * FROM maps_per_msg_outcomes ORDER BY PROC_INST_ID_, maps_msg_number
+    ;
+
+
+
+
+
+
+
+
+
+
+

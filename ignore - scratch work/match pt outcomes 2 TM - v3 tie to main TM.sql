@@ -1,17 +1,134 @@
-/* 
-Summary: This script writes semi-wide text messages dataset as a table on the analyst schema. 
-		 It is semi-wide in that each row is an intervention (parent message) [or MAPS notification message (TM1+MAPS only!)], and it has columns for all subsequent messages (child messages).
-		 That dataset feeds into the pipeline to be used in the wide outcomes WF dataset, but can also be a standalone 'per request' additional dataset for analysis
-
-Inputs from analyst schema: analyst.B_textmessages_tall
-
-Outputs: analyst.C_tm_responses_wide
+/*	
+NOTES: The 'last_response_time' is currently tracking the time 
+a pn manually reviewed and updated a response, when applicable. May
+want to update the code so that it is tracking the time when the pt
+texted their response as the 'last_response_time'
 */
-use workflow;
-DROP TABLE analyst.C_tm_responses_wide;
-CREATE TABLE analyst.C_tm_responses_wide as
+DROP TABLE analyst.tm_responses_wide;
+CREATE TABLE analyst.tm_responses_wide as
 
-with msg_order as (SELECT * FROM analyst.B_textmessages_tall)
+
+with tall_dat as (
+SELECT 
+    BUSINESS_KEY_ patient_cd, pd.NAME_ wf_name, un.*
+FROM
+    (SELECT 
+        dt.PROC_INST_ID_,
+            'ACT_HI_DETAIL' AS source_tbl,
+            ai.ACT_ID_,
+            NAME_,
+            VAR_TYPE_,
+            DOUBLE_, 
+            LONG_, 
+            TEXT_,
+            TIME_ START_TIME_,
+            TIME_ END_TIME_,
+            ai.TRANSACTION_ORDER_,
+            NULL AS DURATION_
+    FROM
+        ACT_HI_DETAIL dt 	
+    LEFT JOIN (SELECT 
+        PROC_INST_ID_, ID_, ACT_ID_, TRANSACTION_ORDER_
+    FROM
+        ACT_HI_ACTINST) ai ON ai.PROC_INST_ID_ = dt.PROC_INST_ID_
+        AND ai.ID_ = dt.ACT_INST_ID_ UNION ALL SELECT 
+        PROC_INST_ID_,
+            'ACT_HI_ACTINST' AS source,
+            ACT_ID_,
+            ACT_NAME_ NAME_,
+            NULL AS VAR_TYPE_,
+            NULL AS DOUBLE_, 
+            NULL AS LONG_, 
+            NULL AS TEXT_,
+            START_TIME_,
+            END_TIME_,
+            TRANSACTION_ORDER_,
+            DURATION_
+    FROM
+        ACT_HI_ACTINST) un
+        LEFT JOIN
+    (SELECT 
+        PROC_INST_ID_, BUSINESS_KEY_, PROC_DEF_ID_
+    FROM
+        ACT_HI_PROCINST) pi ON pi.PROC_INST_ID_ = un.PROC_INST_ID_
+        LEFT JOIN
+    (SELECT 
+        ID_, NAME_
+    FROM
+        ACT_RE_PROCDEF) pd ON pd.ID_ = pi.PROC_DEF_ID_)
+/* tall_dat above is redundant if copying over to tall dataset query */
+
+, clarified_resp as (select 
+	PROC_INST_ID_
+    , 'manuallyClarifiedResponse' 	NAME_
+    , START_TIME_					TIME_
+    , TEXT_
+	, 'manuallyClarifiedResponse'	textType
+from tall_dat where NAME_ = 'pnResponse' AND ACT_ID_ in ('staffReviewTM1', 'staffReviewTMPlus', 'tm1AndMapsInvalidResponseSort', 'tmPlusInvalidResponseSort'))
+
+
+, base as (SELECT
+	PROC_INST_ID_
+    , NAME_
+    , TIME_
+    , TEXT_ 
+    , CASE
+		WHEN NAME_ like 'tmPlusMapsMessage%'	THEN 'sentMAPSnotification'
+		WHEN NAME_ regexp 'message[1-5]SentText' AND NAME_ != 'noContactMessage1SentText' THEN 'sentText'
+        WHEN NAME_ regexp 'response[0-3]Text' THEN 'response'
+        WHEN NAME_ = 'clarification1SentText' THEN 'sentClarfication'
+        WHEN NAME_ = 'confirmation1SentText' THEN 'sentConfirmation'
+        WHEN NAME_ = 'noContactMessage1SentText' THEN 'sentNoContact'
+        END as textType 
+    /* , if (NAME_ REGEXP 'response[0-3]Text', 'response', 'sentText') textType */
+    FROM ACT_HI_DETAIL
+	where (NAME_ REGEXP 'response[0-3]Text' /* Aside from the 3 pts with a bug, no pts had more than 3 responses per workflow*/
+		OR NAME_ REGEXP 'SentText')
+       -- /* just for testing, remove after*/ AND PROC_INST_ID_ = '26458214-384d-11ed-a7e6-005056be8d74' -- '0e853edb-3f6a-11ed-9f51-005056be8d74'
+    order by PROC_INST_ID_, TIME_, NAME_
+    )
+
+-- select * from base order by PROC_INST_ID_, TIME_, NAME_ desc;
+/*select distinct NAME_ from base;*/
+/* select * from base;*/
+-- select * from base;
+
+
+/* 	• TM1andMAPS has second rand text message 'tm1AndMAPSMessage' labelled as 'message1SentText' which has the same label as the numbering of TMs (non MAPS notification TMs)
+Need to re-name as  'tm1AndMapsMessage' */
+, base_v2 as (select 
+	base.PROC_INST_ID_
+    , if( p4.TEXT_ = 'MAPS' AND base.NAME_ = 'message1SentText', 'tm1AndMapsMessage', base.NAME_) 		NAME_
+    , base.TIME_
+    , base.TEXT_
+    , base.textType
+from (select * from base) base
+	left join
+		( select * from ACT_HI_DETAIL where NAME_ = 'phase4RandomizationGroup') p4
+	on p4.PROC_INST_ID_ = base.PROC_INST_ID_)
+
+-- select * from base_v2;
+
+, base_v3 as (select * from base_v2 union all select * FROM clarified_resp) 
+
+-- select * from base_v3 order by PROC_INST_ID_, TIME_, NAME_ desc;
+
+
+, msg_order as (SELECT 
+	*
+    , ROW_NUMBER() OVER( PARTITION BY PROC_INST_ID_ ORDER BY TIME_, FIELD(textType, 'response','sentClarification','sentConfirmation','sentNoContact','sentText','sentMAPSnotification'))	message_order 
+    -- , ROW_NUMBER() OVER( PARTITION BY PROC_INST_ID_ ORDER BY TIME_, NAME_) 			message_order /* Saw cases where clarification#SentText had same timestamp as a response. Order should be that the response comes before the clarificationsenttext*/
+    , ROW_NUMBER() OVER( PARTITION BY PROC_INST_ID_, textType ORDER BY TIME_, NAME_)	message_type_order
+FROM base_v2
+order by PROC_INST_ID_, textType, TIME_, NAME_)
+
+/*select * from msg_order order by PROC_INST_ID_, message_order;*/
+/*select NAME_ from msg_order group by NAME_;*/
+
+/* select distinct message_order, count(1) n from msg_order group by message_order*/ /* The longest message order is 9*/
+/*select distinct message_type_order, count(1) n from msg_order where textType = 'sentText' group by message_type_order*/  /* The most texts sent in 1 workflow is 6*/
+/* select distinct message_order, count(1) n from msg_order where textType = 'response' group by message_order*/ /* As expected, a response text is never the first text message in the conversation. 
+Responses range from msg 2 to 9*/
 
 , wide_sent as (SELECT 
 	mo.*
@@ -32,19 +149,19 @@ with msg_order as (SELECT * FROM analyst.B_textmessages_tall)
     , st5.message_order			sentText5_msg_order
 FROM (SELECT * FROM msg_order) mo
 LEFT JOIN 
-	( SELECT * FROM msg_order where textType in ('sentMotivationalTM', 'tm1AndMapsMessage') and message_type_order = 1 ) st1
+	( SELECT * FROM msg_order where textType = 'sentText' and message_type_order = 1 ) st1
 on st1.PROC_INST_ID_ = mo.PROC_INST_ID_
 LEFT JOIN 
-	( SELECT * FROM msg_order where textType in ('sentMotivationalTM', 'tm1AndMapsMessage') and message_type_order = 2 ) st2
+	( SELECT * FROM msg_order where textType = 'sentText' and message_type_order = 2 ) st2
 on st2.PROC_INST_ID_ = mo.PROC_INST_ID_ 
 LEFT JOIN 
-	( SELECT * FROM msg_order where textType in ('sentMotivationalTM', 'tm1AndMapsMessage') and message_type_order = 3 ) st3
+	( SELECT * FROM msg_order where textType = 'sentText' and message_type_order = 3 ) st3
 on st3.PROC_INST_ID_ = mo.PROC_INST_ID_
 LEFT JOIN 
-	( SELECT * FROM msg_order where textType in ('sentMotivationalTM', 'tm1AndMapsMessage') and message_type_order = 4 ) st4
+	( SELECT * FROM msg_order where textType = 'sentText' and message_type_order = 4 ) st4
 on st4.PROC_INST_ID_ = mo.PROC_INST_ID_ 
 LEFT JOIN 
-	( SELECT * FROM msg_order where textType in ('sentMotivationalTM', 'tm1AndMapsMessage') and message_type_order = 5 ) st5
+	( SELECT * FROM msg_order where textType = 'sentText' and message_type_order = 5 ) st5
 on st5.PROC_INST_ID_ = mo.PROC_INST_ID_)
 
 -- SELECT * FROM wide_sent group by PROC_INST_ID_;
@@ -53,15 +170,15 @@ on st5.PROC_INST_ID_ = mo.PROC_INST_ID_)
 , resp_matched as (SELECT 
 	* 
 	, CASE
-		WHEN textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND sentText2_time is null THEN 1
-		WHEN textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND TIME_ BETWEEN sentText1_time AND sentText2_time THEN 1
-        WHEN textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND sentText3_time is null THEN 2
-        WHEN textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND TIME_ BETWEEN sentText2_time AND sentText3_time THEN 2
-        WHEN textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND sentText4_time is null THEN 3
-        WHEN textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND TIME_ BETWEEN sentText3_time AND sentText4_time THEN 3
-        WHEN textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND sentText5_time is null THEN 4
-        WHEN textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND TIME_ BETWEEN sentText4_time AND sentText5_time THEN 4
-        WHEN textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND TIME_ > sentText5_time THEN 5
+		WHEN textType != 'sentText' AND sentText2_time is null THEN 1
+		WHEN textType != 'sentText' AND TIME_ BETWEEN sentText1_time AND sentText2_time THEN 1
+        WHEN textType != 'sentText' AND sentText3_time is null THEN 2
+        WHEN textType != 'sentText' AND TIME_ BETWEEN sentText2_time AND sentText3_time THEN 2
+        WHEN textType != 'sentText' AND sentText4_time is null THEN 3
+        WHEN textType != 'sentText' AND TIME_ BETWEEN sentText3_time AND sentText4_time THEN 3
+        WHEN textType != 'sentText' AND sentText5_time is null THEN 4
+        WHEN textType != 'sentText' AND TIME_ BETWEEN sentText4_time AND sentText5_time THEN 4
+        WHEN textType != 'sentText' AND TIME_ > sentText5_time THEN 5
 	END as responding_to_sentText_num
         
 FROM wide_sent
@@ -118,7 +235,7 @@ FROM
 		, responding_to_sentText_num
 	FROM resp_matched) rm
 LEFT JOIN
-	( SELECT * from msg_order where textType in ('sentMotivationalTM', 'tm1AndMapsMessage')) sto
+	( SELECT * from msg_order where textType = 'sentText') sto
 on sto.PROC_INST_ID_ = rm.PROC_INST_ID_ AND sto.message_type_order = rm.responding_to_sentText_num
 )
 
@@ -156,24 +273,24 @@ on sto.PROC_INST_ID_ = rm.PROC_INST_ID_ AND sto.message_type_order = rm.respondi
     , r5.TIME_			child5_time
     , r5.TEXT_			child5_text
     , r5.message_order	child5_message_order
-FROM ( SELECT * FROM matched_response_to_tm WHERE textType in ('sentMotivationalTM', 'tm1AndMapsMessage') ) st
+FROM ( SELECT * FROM matched_response_to_tm WHERE textType = 'sentText' ) st
 LEFT JOIN 
-	( SELECT * FROM matched_response_to_tm WHERE textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND response_num_per_sentText = 1) r1
+	( SELECT * FROM matched_response_to_tm WHERE textType != 'sentText' AND response_num_per_sentText = 1) r1
 on r1.PROC_INST_ID_ = st.PROC_INST_ID_ AND r1.text_message_name_responding_to = st.NAME_
 LEFT JOIN 
-	( SELECT * FROM matched_response_to_tm WHERE textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND response_num_per_sentText = 2) r2
+	( SELECT * FROM matched_response_to_tm WHERE textType != 'sentText' AND response_num_per_sentText = 2) r2
 on r2.PROC_INST_ID_ = st.PROC_INST_ID_ AND r2.text_message_name_responding_to = st.NAME_
 LEFT JOIN 
-	( SELECT * FROM matched_response_to_tm WHERE textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND response_num_per_sentText = 3) r3
+	( SELECT * FROM matched_response_to_tm WHERE textType != 'sentText' AND response_num_per_sentText = 3) r3
 on r3.PROC_INST_ID_ = st.PROC_INST_ID_ AND r3.text_message_name_responding_to = st.NAME_
 LEFT JOIN 
-	( SELECT * FROM matched_response_to_tm WHERE textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND response_num_per_sentText = 4) r4
+	( SELECT * FROM matched_response_to_tm WHERE textType != 'sentText' AND response_num_per_sentText = 4) r4
 on r4.PROC_INST_ID_ = st.PROC_INST_ID_ AND r3.text_message_name_responding_to = st.NAME_
 LEFT JOIN 
-	( SELECT * FROM matched_response_to_tm WHERE textType not in ('sentMotivationalTM', 'tm1AndMapsMessage') AND response_num_per_sentText = 5) r5
+	( SELECT * FROM matched_response_to_tm WHERE textType != 'sentText' AND response_num_per_sentText = 5) r5
 on r5.PROC_INST_ID_ = st.PROC_INST_ID_ AND r5.text_message_name_responding_to = st.NAME_)
 
--- SELECT * FROM tm_w_resp order by PROC_INST_ID_, parent_message_order;
+-- SELECT * FROM tm_w_resp order by PROC_INST_ID_, message_order;
 
 , last_responses as (SELECT * FROM (SELECT 
 	*

@@ -3,12 +3,12 @@ Summary: This script writes the wide outcomes WF dataset as a table on the analy
 
 Inputs from analyst schema: None
 
-Outputs: analyst.A_workflow_data_tall
+Outputs: analyst.H_workflow_data_tall
 */
 
 use workflow;
-DROP TABLE IF EXISTS analyst.workflow_data_tall;
-CREATE TABLE analyst.A_workflow_data_tall as
+DROP TABLE IF EXISTS analyst.H_workflow_data_tall;
+CREATE TABLE analyst.H_workflow_data_tall as
 
 with tall_dat as (
 SELECT 
@@ -59,5 +59,4 @@ FROM
     FROM
         ACT_RE_PROCDEF) pd ON pd.ID_ = pi.PROC_DEF_ID_)
 
-select * from tall_dat ORDER BY patient_cd , START_TIME_ , END_TIME_ , TRANSACTION_ORDER_ , source_tbl
-	;
+select * from tall_dat ORDER BY patient_cd , START_TIME_ , END_TIME_ , TRANSACTION_ORDER_ , source_tbl;

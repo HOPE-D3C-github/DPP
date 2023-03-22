@@ -1,11 +1,11 @@
 /* Summary: Create a function that can convert datetimes from GMT to a string representing the timestamp in "America/Denver" timezone, accounting for daylight savings.
 
 UTC offset 2021:
-America/Denver: 	2021-03-14 02:00 through 2021-11-07 01:59 = -6
-GMT: 				2021-03-14 09:00 through 2021-11-07 07:59 = -6
+America/Denver: 	2021-03-14 02:00 through 2021-11-07 01:59 = -06:00
+GMT: 				2021-03-14 09:00 through 2021-11-07 07:59 = -06:00
 
-America/Denver: 	2021-11-07 02:00 through 2022-03-13 01:59 = -7
-GMT:				2022-11-07 08:00 through 2022-03-13 08:59 = -7
+America/Denver: 	2021-11-07 02:00 through 2022-03-13 01:59 = -07:00
+GMT:				2022-11-07 08:00 through 2022-03-13 08:59 = -07:00
 
 UTC offset 2022:
 America/Denver:		2022-03-13 02:00 through 2022-11-06 01:59  = -06:00

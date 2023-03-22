@@ -1,0 +1,243 @@
+---
+title: "DPP EHR Data Curation Pipeline"
+format: html
+editor: visual
+---
+
+## Introduction
+
+This document will be used to annotate and curate the ***DPP Project*** Electronic Health Record (EHR) data.
+
+## Load Data Files
+
+```{r, include=FALSE}
+library(dplyr)
+library(readr)
+library(tidyr)
+library(stringr)
+library(lubridate)
+library(scales)
+library(odbc)
+library(DBI)
+library(dbplyr)
+library(bit64)
+library(haven)
+
+pre_box <- getwd() %>% str_remove("Box.+")
+path_to_ehr_dat <- paste0(pre_box, "Box/Medicaid DPP/EDW Pull")
+path_to_outputs <- paste0(pre_box, "Box/Medicaid DPP/Data Management/Scripts for Analytical Dataset/outputs")
+
+# reformatting dates where applicable
+demog <- read_csv(file.path(path_to_ehr_dat, "dpp_inclusion_pat_demog_20220321.csv"), show_col_types = FALSE) %>% 
+  mutate(BIRTH_DATE = dmy(BIRTH_DATE), LAST_PCP_ENCOUNTER_DT = dmy(LAST_PCP_ENCOUNTER_DT))
+race <- read_csv(file.path(path_to_ehr_dat, "dpp_inclusion_pat_race_20220321.csv"), show_col_types = FALSE) %>% 
+  slice(1:nrow(.)-1) %>% #last row is text and not meant to be kept in
+  rename(race_raw = NAME)
+encounters <- read_csv(file.path(path_to_ehr_dat, 'dpp_inclusion_pat_enc_dx_20220321.csv'), show_col_types = FALSE) %>% 
+  mutate(ENCOUNTER_DT = dmy(ENCOUNTER_DT))
+pt_prob_list <- read_csv(file.path(path_to_ehr_dat, 'dpp_inclusion_pat_prob_list_dx_20220321.csv'), show_col_types = FALSE) %>% 
+  slice(1:nrow(.)-1) %>%  #last row is text and not meant to be kept in 
+  mutate(DATE_OF_ENTRY = dmy(DATE_OF_ENTRY))
+
+```
+
+```{r}
+# Connect to database to grab some workflow data
+
+# converts integer64 columns to a more native R numeric format. 
+clean_int64 <- function(mydf){
+  mutate_if(.tbl=mydf,
+            .predicate=bit64::is.integer64,
+            .funs=bit64::as.double.integer64)
+}
+### read all tables from workflow schema
+my_readtable <- function(mytable){
+  tbl(con, in_schema(production_schema, mytable)) %>% as_tibble %>% clean_int64
+}
+
+#mysql_dpp_username <- read_lines(file = file.path(pre_box, "Box/my_credentials/mysql_dpp_username.txt"))
+#mysql_dpp_password <- read_lines(file = file.path(pre_box, "Box/my_credentials/mysql_dpp_password.txt"))
+# production_schema <- 'workflow' #this varies between servers
+
+sort(unique(odbc::odbcListDrivers()[[1]]))
+#ensure "MySQL ODBC 8.0 ANSI Driver" or "MySQL ODBC 8.0 Unicode Driver" are installed -- 
+#mariadb has a connector too, but MySQL installer makes the above easy to install. if you use MariaDB, then you'll need to update driver below. there's also the mariadb package.
+con <- DBI::dbConnect(odbc::odbc(),
+                      Driver   =  "MySQL ODBC 8.0 ANSI Driver",
+                      Server   = "localhost", #standard
+                      user = read_lines(file = file.path(pre_box, "Box/my_credentials/mysql_dpp_username.txt")),        #mysql_dpp_username
+                      password = read_lines(file = file.path(pre_box, "Box/my_credentials/mysql_dpp_password.txt")),    #mysql_dpp_username
+                      Port     = 5508 #get server (if local) or from command run to SSH to remote server
+)
+
+participants_in_study <- dplyr::tbl(con, from = dbplyr::in_schema('analyst', 'E_crosswalk_uid_to_patient_cd')) %>% 
+  as_tibble() %>% mutate(MRN = str_remove(patient_cd, 'DPP:')) %>% select(-patient_cd) %>% mutate(in_study = TRUE)
+
+# @TB check that this catches all from the other datasets, post-merge
+participants_not_in_study <- demog %>% 
+  anti_join(y = participants_in_study, by = 'MRN') %>% 
+  select(MRN) %>% 
+  mutate(uid = paste0('DPP:', nrow(participants_in_study) + row_number()), .before = MRN) %>% 
+  mutate(in_study = FALSE)
+
+crosswalk <- participants_in_study %>% add_row(participants_not_in_study)
+
+remove(participants_in_study, participants_not_in_study)
+```
+
+## Process Race Data
+
+```{r}
+if(any(duplicated(race)) == FALSE){print("No Duplicates")}else{print(paste0("Duplicates Detected at row number(s): ", list(which(duplicated(race)))))}    # Confirming there are no duplicates
+
+race %>% group_by(MRN) %>% mutate(n_races_selected=n()) %>% filter(row_number() == 1) %>% ungroup %>% count(n_races_selected)
+
+
+```
+
+```{r}
+pt_combined_races <- race %>% arrange(MRN, race_raw) %>% group_by(MRN) %>% mutate(n_races_selected=n()) %>% summarise(all_races = paste(race_raw, collapse = '; '), n_races = n()) 
+
+pt_combined_races_counts <- pt_combined_races %>% count(all_races, n_races) %>% mutate(percentage = percent( n/sum(n))) %>% arrange(desc(percentage))
+```
+
+```{r}
+race %>% count(race_raw)
+```
+
+-   Process the raw race values to aggregate similar values
+
+```{r}
+
+races_crosswalk <- tribble(
+  ~race_raw, ~race_processed,
+  'American Indian and Alaska Native', 'American Indian and Alaska Native',
+  'Asian', 'Asian',
+  'Black or African American', 'Black or African American',
+  'Choose not to disclose', 'Choose not to disclose',
+  'Native Hawaiian', 'Pacific Islander',
+  'Native Hawaiian and Other Pacific Islander', 'Pacific Islander',
+  'Other', 'Other',
+  'Other Pacific Islander', 'Pacific Islander',
+  'Unknown', 'Unknown',
+  'White or Caucasian', 'White or Caucasian'
+)
+
+
+race <- race %>% 
+  left_join(y = races_crosswalk,
+            by = "race_raw")
+
+```
+
+-   Create patient level race, same as raw if only 1 race selected or else multiracial
+
+```{r}
+race_v2 <- race
+
+race_tall <- race_v2 %>% group_by(MRN) %>% mutate(cntd_unkn = race_processed %in% c('Choose not to disclose','Unknown'),
+                                     n_cntd_unkn = sum(race_processed %in% c('Choose not to disclose','Unknown')), 
+                                     n_selected = n()) %>% 
+  arrange(desc(n_cntd_unkn), MRN) %>% 
+  mutate(
+    all_races_list = unique(list(race_processed[race_processed != 'Choose not to disclose'])),
+    
+    race_pt_category = case_when(
+      n_selected == 1 ~ race_processed,
+      n_selected - n_cntd_unkn > 1 ~ 'Multiracial',
+      n_selected - n_cntd_unkn == 1 ~ unlist(all_races_list)[1],  #race_processed[which(!cntd_unkn)],
+      n_selected == n_cntd_unkn & any(race_processed == 'Unknown') ~ 'Unknown',
+      T ~ 'Choose not to disclose')
+    
+  ) %>% select(-cntd_unkn, -n_cntd_unkn, -n_selected, -all_races_list) %>% ungroup() %>% arrange(MRN)
+
+race_pt <- race_tall %>% group_by(MRN) %>% select(MRN, race_pt_category) %>% slice(1) %>% ungroup()
+
+race_pt %>% count(race_pt_category) %>% arrange(desc(n))
+
+```
+
+## Merge patient level race variable onto the patient level demographics dataset
+
+```{r}
+if(nrow(demog) == nrow(race_pt)){
+  print('Same number of rows in the patient level demographics dataset and the patient level race dataset. Clear to proceed.')
+} else{
+    print('Unequal number of rows in the patient level demographics dataset and the patient level race dataset. Please inspect!')
+  }
+
+demog <- demog %>% 
+  left_join(y = race_pt,
+            by = 'MRN') %>% 
+  relocate(race_pt_category, .after = ETHNICITY)
+
+
+remove(race, race_pt, race_v2, pt_combined_races, pt_combined_races_counts)
+
+```
+
+## Redact PHI from the Demographics Table
+
+```{r}
+
+demog <- demog %>% 
+  mutate(birth_year = year(BIRTH_DATE), .after = BIRTH_DATE) %>%  
+  select(-c(PAT_FIRST_NAME, PAT_LAST_NAME, BIRTH_DATE, ADDRESS_LINE_1, ADDRESS_LINE_2, PHONE, EMAIL)) %>% 
+  rename(AGE_on_20220321 = AGE)
+
+```
+
+## Merge datasets with list of participants in study
+
+```{r}
+demog <- demog %>% 
+  left_join(y = crosswalk,
+            by = 'MRN'
+  ) %>% relocate(uid, in_study, .before = MRN) %>% 
+  select(-MRN)
+
+encounters <- encounters %>% 
+  left_join(y = crosswalk,
+            by = 'MRN'
+  ) %>% relocate(uid, in_study, .before = MRN) %>% 
+  select(-MRN)
+
+pt_prob_list <- pt_prob_list %>% 
+  left_join(y = crosswalk,
+            by = 'MRN'
+  ) %>% relocate(uid, in_study, .before = MRN) %>% 
+  select(-MRN)
+
+race_tall <- race_tall %>% 
+  left_join(y = crosswalk,
+            by = 'MRN'
+  ) %>% relocate(uid, in_study, .before = MRN) %>% 
+  select(-MRN)
+
+remove(crosswalk)
+```
+
+## Save datasets
+
+```{r}
+# demographic data
+saveRDS(demog , file = file.path(path_to_outputs, "demographics.rds"))  # R/python users
+write_dta(data = demog, path = file.path(path_to_outputs, "demographics.dta"))  # Stata/SAS users
+write.csv(x = demog, file.path(path_to_outputs, "demographics.csv"), row.names = FALSE, na = "")
+
+# encounters data
+saveRDS(encounters , file = file.path(path_to_outputs, "encounters.rds"))  # R/python users
+write_dta(data = encounters, path = file.path(path_to_outputs, "encounters.dta"))  # Stata/SAS users
+write.csv(x = encounters, file.path(path_to_outputs, "encounters.csv"), row.names = FALSE, na = "")
+
+# pt_prob_list
+saveRDS(pt_prob_list , file = file.path(path_to_outputs, "pt_prob_list.rds"))  # R/python users
+write_dta(data = pt_prob_list, path = file.path(path_to_outputs, "pt_prob_list.dta"))  # Stata/SAS users
+write.csv(x = pt_prob_list, file.path(path_to_outputs, "pt_prob_list.csv"), row.names = FALSE, na = "")
+
+# race_tall
+saveRDS(race_tall , file = file.path(path_to_outputs, "race_tall.rds"))  # R/python users
+write_dta(data = race_tall, path = file.path(path_to_outputs, "race_tall.dta"))  # Stata/SAS users
+write.csv(x = race_tall, file.path(path_to_outputs, "race_tall.csv"), row.names = FALSE, na = "")
+
+```
