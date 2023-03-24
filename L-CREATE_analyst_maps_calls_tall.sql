@@ -1,5 +1,5 @@
 use workflow;
-DROP TABLE IF EXISTS analyst.F_mapsCalls_tall;
+DROP TABLE IF EXISTS analyst.L_mapsCalls_tall;
 CREATE TABLE analyst.L_mapsCalls_tall as
 with base as (SELECT
 	PROC_INST_ID_

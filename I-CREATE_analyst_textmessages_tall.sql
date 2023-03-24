@@ -11,7 +11,8 @@ DROP TABLE IF EXISTS analyst.I_textmessages_tall;
 CREATE TABLE analyst.I_textmessages_tall
 
 with base as (SELECT
-	PROC_INST_ID_
+	cw.uid
+    , dt.PROC_INST_ID_
     , NAME_
     , TIME_
     , TEXT_ 
@@ -23,16 +24,19 @@ with base as (SELECT
         WHEN NAME_ = 'confirmation1SentText' THEN 'sentConfirmation'
         WHEN NAME_ = 'noContactMessage1SentText' THEN 'sentNoContact'
         END as textType 
-    FROM ACT_HI_DETAIL
+    FROM (SELECT * FROM ACT_HI_DETAIL
 	where (NAME_ REGEXP 'response[0-3]Text' /* Aside from the 3 pts with a bug, no pts had more than 3 responses per workflow*/
-		OR NAME_ REGEXP 'SentText')
-    order by PROC_INST_ID_, TIME_, NAME_
+		OR NAME_ REGEXP 'SentText') ) dt
+	LEFT JOIN (SELECT * FROM analyst.C_crosswalk_uid_to_MRN) cw
+    ON dt.PROC_INST_ID_ = cw.PROC_INST_ID_
+    order by uid, TIME_, NAME_
     )
 
 /* 	TM1andMAPS has second rand text message 'tm1AndMAPSMessage' labelled as 'message1SentText' which has the same label as the numbering of TMs (non MAPS notification TMs)
 Need to re-name as  'tm1AndMapsMessage' */
 , base_v2 as (select 
-	base.PROC_INST_ID_
+	uid
+    , base.PROC_INST_ID_
     , if( p4.TEXT_ = 'MAPS' AND base.NAME_ = 'message1SentText', 'tm1AndMapsMessage', base.NAME_) 		NAME_
     , base.TIME_
     , analyst.convert_to_AmDenv(base.TIME_) TIME_AmDenv

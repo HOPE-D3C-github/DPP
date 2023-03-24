@@ -11,8 +11,7 @@ pre_box <- getwd() %>% str_remove("OneDrive.+")
 
 # STEP 1: Create ordered dataframe of files to be run ----
 data_pipeline <- data.frame(name = list.files()) %>% filter(!str_detect(name, pattern = 'ignore|.docx|.md')) %>% 
-  filter(!str_detect(name, pattern = 'Loading_EHR_data_into_SQL_database|Execute_DPP_data_pipeline|CREATE_analyst_convert_to_AmDenv')) %>% 
-  filter(name != 'create_codebook.R') %>%  # @TB: temporary - ensure this is removed
+  filter(!str_detect(name, pattern = 'Loading_EHR_data_into_SQL_database|Execute_DPP_data_pipeline|CREATE_analyst_convert_to_AmDenv|Data_pipeline_viz')) %>% 
   mutate(started_running_file = NA,
          finished_running_file = NA)
 
