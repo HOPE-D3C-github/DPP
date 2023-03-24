@@ -79,7 +79,7 @@ ON maps3.PROC_INST_ID_ = maps1.PROC_INST_ID_)
 
  , maps_outcomes as (SELECT 
 	cw.uid
-	, pi.BUSINESS_KEY_
+	, cw.patient_cd BUSINESS_KEY_
     , maps_outcomes_base.PROC_INST_ID_
     , CASE 
 		WHEN maps2_message_hrts_GMT is null THEN 1
@@ -94,10 +94,8 @@ ON maps3.PROC_INST_ID_ = maps1.PROC_INST_ID_)
 FROM maps_outcomes_base
 LEFT JOIN maps_msg_times
 ON maps_msg_times.PROC_INST_ID_ = maps_outcomes_base.PROC_INST_ID_
-LEFT JOIN ACT_HI_PROCINST pi
-ON pi.PROC_INST_ID_ = maps_outcomes_base.PROC_INST_ID_
 LEFT JOIN analyst.C_crosswalk_uid_to_MRN cw
-ON cw.patient_cd = pi.BUSINESS_KEY_
+ON cw.PROC_INST_ID_ = maps_outcomes_base.PROC_INST_ID_
 
 )
 
